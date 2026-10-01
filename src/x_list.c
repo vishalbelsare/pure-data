@@ -4,18 +4,9 @@
 
 #include "m_pd.h"
 #include <string.h>
+#include <stdlib.h>
 
-#ifdef _WIN32
-# include <malloc.h> /* MSVC or mingw on windows */
-#elif defined(__linux__) || defined(__APPLE__) || defined(HAVE_ALLOCA_H)
-# include <alloca.h> /* linux, mac, mingw, cygwin */
-#else
-# include <stdlib.h> /* BSDs for example */
-#endif
-
-#ifndef HAVE_ALLOCA     /* can work without alloca() but we never need it */
-#define HAVE_ALLOCA 1
-#endif
+#include "m_private_utils.h"
 
 #define LIST_NGETBYTE 100 /* bigger that this we use alloc, not alloca */
 
@@ -58,16 +49,6 @@ typedef struct _alist
     int l_npointer;     /* number of pointers */
     t_listelem *l_vec;  /* pointer to items */
 } t_alist;
-
-#if HAVE_ALLOCA
-#define ATOMS_ALLOCA(x, n) ((x) = (t_atom *)((n) < LIST_NGETBYTE ?  \
-        alloca((n) * sizeof(t_atom)) : getbytes((n) * sizeof(t_atom))))
-#define ATOMS_FREEA(x, n) ( \
-    ((n) < LIST_NGETBYTE || (freebytes((x), (n) * sizeof(t_atom)), 0)))
-#else
-#define ATOMS_ALLOCA(x, n) ((x) = (t_atom *)getbytes((n) * sizeof(t_atom)))
-#define ATOMS_FREEA(x, n) (freebytes((x), (n) * sizeof(t_atom)))
-#endif
 
 static void atoms_copy(int argc, t_atom *from, t_atom *to)
 {
@@ -232,7 +213,7 @@ static void list_append_list(t_list_append *x, t_symbol *s,
 {
     t_atom *outv;
     int outc = x->x_alist.l_n + argc;
-    ATOMS_ALLOCA(outv, outc);
+    ALLOCA(t_atom, outv, outc, LIST_NGETBYTE);
     atoms_copy(argc, argv, outv);
     if (x->x_alist.l_npointer)
     {
@@ -247,7 +228,7 @@ static void list_append_list(t_list_append *x, t_symbol *s,
         alist_toatoms(&x->x_alist, outv+argc, 0, x->x_alist.l_n);
         outlet_list(x->x_obj.ob_outlet, &s_list, outc, outv);
     }
-    ATOMS_FREEA(outv, outc);
+    FREEA(t_atom, outv, outc, LIST_NGETBYTE);
 }
 
 static void list_append_anything(t_list_append *x, t_symbol *s,
@@ -255,7 +236,7 @@ static void list_append_anything(t_list_append *x, t_symbol *s,
 {
     t_atom *outv;
     int outc = x->x_alist.l_n + argc + 1;
-    ATOMS_ALLOCA(outv, outc);
+    ALLOCA(t_atom, outv, outc, LIST_NGETBYTE);
     SETSYMBOL(outv, s);
     atoms_copy(argc, argv, outv + 1);
     if (x->x_alist.l_npointer)
@@ -271,7 +252,7 @@ static void list_append_anything(t_list_append *x, t_symbol *s,
         alist_toatoms(&x->x_alist, outv + 1 + argc, 0, x->x_alist.l_n);
         outlet_list(x->x_obj.ob_outlet, &s_list, outc, outv);
     }
-    ATOMS_FREEA(outv, outc);
+    FREEA(t_atom, outv, outc, LIST_NGETBYTE);
 }
 
 static void list_append_free(t_list_append *x)
@@ -310,7 +291,7 @@ static void list_prepend_list(t_list_prepend *x, t_symbol *s,
 {
     t_atom *outv;
     int n, outc = x->x_alist.l_n + argc;
-    ATOMS_ALLOCA(outv, outc);
+    ALLOCA(t_atom, outv, outc, LIST_NGETBYTE);
     atoms_copy(argc, argv, outv + x->x_alist.l_n);
     if (x->x_alist.l_npointer)
     {
@@ -325,7 +306,7 @@ static void list_prepend_list(t_list_prepend *x, t_symbol *s,
         alist_toatoms(&x->x_alist, outv, 0, x->x_alist.l_n);
         outlet_list(x->x_obj.ob_outlet, &s_list, outc, outv);
     }
-    ATOMS_FREEA(outv, outc);
+    FREEA(t_atom, outv, outc, LIST_NGETBYTE);
 }
 
 static void list_prepend_anything(t_list_prepend *x, t_symbol *s,
@@ -333,7 +314,7 @@ static void list_prepend_anything(t_list_prepend *x, t_symbol *s,
 {
     t_atom *outv;
     int n, outc = x->x_alist.l_n + argc + 1;
-    ATOMS_ALLOCA(outv, outc);
+    ALLOCA(t_atom, outv, outc, LIST_NGETBYTE);
     SETSYMBOL(outv + x->x_alist.l_n, s);
     atoms_copy(argc, argv, outv + x->x_alist.l_n + 1);
     if (x->x_alist.l_npointer)
@@ -349,7 +330,7 @@ static void list_prepend_anything(t_list_prepend *x, t_symbol *s,
         alist_toatoms(&x->x_alist, outv, 0, x->x_alist.l_n);
         outlet_list(x->x_obj.ob_outlet, &s_list, outc, outv);
     }
-    ATOMS_FREEA(outv, outc);
+    FREEA(t_atom, outv, outc, LIST_NGETBYTE);
 }
 
 static void list_prepend_free(t_list_prepend *x)
@@ -399,7 +380,7 @@ static void list_store_send(t_list_store *x, t_symbol *s)
         pd_error(x, "%s: no such object", s->s_name);
         return;
     }
-    ATOMS_ALLOCA(vec, n);
+    ALLOCA(t_atom, vec, n, LIST_NGETBYTE);
     if (x->x_alist.l_npointer)
     {
         t_alist y;
@@ -413,7 +394,7 @@ static void list_store_send(t_list_store *x, t_symbol *s)
         alist_toatoms(&x->x_alist, vec, 0, n);
         pd_list(s->s_thing, gensym("list"), n, vec);
     }
-    ATOMS_FREEA(vec, n);
+    FREEA(t_atom, vec, n, LIST_NGETBYTE);
 }
 
 static void list_store_list(t_list_store *x, t_symbol *s,
@@ -421,7 +402,7 @@ static void list_store_list(t_list_store *x, t_symbol *s,
 {
     t_atom *outv;
     int n, outc = x->x_alist.l_n + argc;
-    ATOMS_ALLOCA(outv, outc);
+    ALLOCA(t_atom, outv, outc, LIST_NGETBYTE);
     atoms_copy(argc, argv, outv);
     if (x->x_alist.l_npointer)
     {
@@ -436,7 +417,7 @@ static void list_store_list(t_list_store *x, t_symbol *s,
         alist_toatoms(&x->x_alist, outv+argc, 0, x->x_alist.l_n);
         outlet_list(x->x_out1, &s_list, outc, outv);
     }
-    ATOMS_FREEA(outv, outc);
+    FREEA(t_atom, outv, outc, LIST_NGETBYTE);
 }
 
 static void list_store_doinsert(t_list_store *x, t_symbol *s,
@@ -527,7 +508,7 @@ static void list_store_delete(t_list_store *x, t_floatarg f1, t_floatarg f2)
     }
         /* shift elements (after the deleted elements) to the left */
     memmove(x->x_alist.l_vec + index, x->x_alist.l_vec + index + n,
-        (x->x_alist.l_n - index) * sizeof(*x->x_alist.l_vec));
+        (x->x_alist.l_n - index - n) * sizeof(*x->x_alist.l_vec));
         /* shrink memory */
     if (!(x->x_alist.l_vec = (t_listelem *)resizebytes(x->x_alist.l_vec,
         (x->x_alist.l_n) * sizeof(*x->x_alist.l_vec),
@@ -548,20 +529,27 @@ static void list_store_delete(t_list_store *x, t_floatarg f1, t_floatarg f2)
     x->x_alist.l_n -= n;
 }
 
-static void list_store_get(t_list_store *x, float f1, float f2)
+static void list_store_get(t_list_store *x, t_floatarg f1, t_floatarg f2)
 {
     t_atom *outv;
     int onset = f1, outc = f2;
     if (!outc)
         outc = 1; /* default */
     else if (outc < 0)
+    {
         outc = x->x_alist.l_n - onset; /* till the end of the list */
+        if (outc <= 0) /* onset out of range */
+        {
+            outlet_bang(x->x_out2);
+            return;
+        }
+    }
     if (onset < 0 || (onset + outc > x->x_alist.l_n))
     {
         outlet_bang(x->x_out2);
         return;
     }
-    ATOMS_ALLOCA(outv, outc);
+    ALLOCA(t_atom, outv, outc, LIST_NGETBYTE);
     if (x->x_alist.l_npointer)
     {
         t_alist y;
@@ -575,7 +563,7 @@ static void list_store_get(t_list_store *x, float f1, float f2)
         alist_toatoms(&x->x_alist, outv, onset, outc);
         outlet_list(x->x_out1, &s_list, outc, outv);
     }
-    ATOMS_FREEA(outv, outc);
+    FREEA(t_atom, outv, outc, LIST_NGETBYTE);
 }
 
 static void list_store_set(t_list_store *x, t_symbol *s, int argc, t_atom *argv)
@@ -665,11 +653,11 @@ static void list_split_anything(t_list_split *x, t_symbol *s,
     int argc, t_atom *argv)
 {
     t_atom *outv;
-    ATOMS_ALLOCA(outv, argc+1);
+    ALLOCA(t_atom, outv, argc+1, LIST_NGETBYTE);
     SETSYMBOL(outv, s);
     atoms_copy(argc, argv, outv + 1);
     list_split_list(x, &s_list, argc+1, outv);
-    ATOMS_FREEA(outv, argc+1);
+    FREEA(t_atom, outv, argc+1, LIST_NGETBYTE);
 }
 
 static void list_split_setup(void)
@@ -781,11 +769,11 @@ static void list_fromsymbol_symbol(t_list_fromsymbol *x, t_symbol *s)
 {
     t_atom *outv;
     int n, outc = (int)strlen(s->s_name);
-    ATOMS_ALLOCA(outv, outc);
+    ALLOCA(t_atom, outv, outc, LIST_NGETBYTE);
     for (n = 0; n < outc; n++)
         SETFLOAT(outv + n, (unsigned char)s->s_name[n]);
     outlet_list(x->x_obj.ob_outlet, &s_list, outc, outv);
-    ATOMS_FREEA(outv, outc);
+    FREEA(t_atom, outv, outc, LIST_NGETBYTE);
 }
 
 static void list_fromsymbol_setup(void)
@@ -816,19 +804,13 @@ static void list_tosymbol_list(t_list_tosymbol *x, t_symbol *s,
     int argc, t_atom *argv)
 {
     int i;
-#if HAVE_ALLOCA
-    char *str = alloca(argc + 1);
-#else
-    char *str = getbytes(argc + 1);
-#endif
+    char *str;
+    ALLOCA(char, str, argc + 1, MAXPDSTRING);
     for (i = 0; i < argc; i++)
         str[i] = (char)atom_getfloatarg(i, argc, argv);
     str[argc] = 0;
     outlet_symbol(x->x_obj.ob_outlet, gensym(str));
-#if HAVE_ALLOCA
-#else
-    freebytes(str, argc+1);
-#endif
+    FREEA(char, str, argc + 1, MAXPDSTRING);
 }
 
 static void list_tosymbol_setup(void)
@@ -839,9 +821,418 @@ static void list_tosymbol_setup(void)
     class_sethelpsymbol(list_tosymbol_class, &s_list);
 }
 
+/* ------------- list foreach --------------------- */
+
+t_class *list_foreach_class;
+
+typedef struct _list_foreach
+{
+    t_object x_obj;
+    t_outlet *x_out1;
+    t_outlet *x_out2;
+    t_float x_step;
+} t_list_foreach;
+
+static void *list_foreach_new(t_floatarg f)
+{
+    t_list_foreach *x = (t_list_foreach *)pd_new(list_foreach_class);
+    x->x_out1 = outlet_new(&x->x_obj, 0);
+    x->x_out2 = outlet_new(&x->x_obj, &s_float);
+    x->x_step = f;
+    floatinlet_new(&x->x_obj, &x->x_step);
+    return (x);
+}
+
+static void list_foreach_do(t_list_foreach *x,
+    int argc, t_atom *argv, int step, int onset)
+{
+    int i;
+    if (step > 0) /* forward iteration */
+    {
+        if (step == 1)
+            for (i = 0; i < argc; i++)
+            {
+                outlet_float(x->x_out2, i + onset);
+                outlet_list(x->x_out1, &s_list, 1, &argv[i]);
+            }
+        else
+            for (i = 0; i < argc; i += step)
+            {
+                int n = (i + step) > argc ? argc - i : step;
+                outlet_float(x->x_out2, i + onset);
+                outlet_list(x->x_out1, &s_list, n, &argv[i]);
+            }
+    }
+    else /* backward iteration */
+    {
+        if (step == -1)
+            for (i = argc - 1; i >= 0; i--)
+            {
+                outlet_float(x->x_out2, i + onset);
+                outlet_list(x->x_out1, &s_list, 1, &argv[i]);
+            }
+        else
+            for (i = argc; i > 0; i += step)
+            {
+                int n, index = i + step;
+                if (index < 0)
+                    index = 0, n = i;
+                else
+                    n = -step;
+                outlet_float(x->x_out2, index + onset);
+                outlet_list(x->x_out1, &s_list, n, &argv[index]);
+            }
+    }
+}
+
+static void list_foreach_list(t_list_foreach *x, t_symbol *s,
+    int argc, t_atom *argv)
+{
+        /* step can be negative but mustn't be zero! default: 1 */
+    int step = (int)x->x_step ? (int)x->x_step : 1;
+    list_foreach_do(x, argc, argv, step, 0);
+}
+
+static void list_foreach_anything(t_list_foreach *x, t_symbol *s,
+    int argc, t_atom *argv)
+{
+        /* step can be negative but mustn't be zero! default: 1 */
+    int step = (int)x->x_step ? x->x_step : 1;
+        /* use some trickery to avoid unnecessary copy of the whole list */
+    t_atom *buf;
+    int n = abs(step);
+    if (n > argc + 1)
+        n = argc + 1;
+    if (step < 0)
+    {
+            /* when iterating backwards, the buffer must contain
+            the "remaining" elements - but only if there are any! */
+        int rem = (argc + 1) % -step;
+        if (rem && n > rem)
+            n = rem;
+    }
+    ALLOCA(t_atom, buf, n, LIST_NGETBYTE);
+    SETSYMBOL(buf, s);
+    atoms_copy(n - 1, argv, buf + 1);
+    if (step > 0)
+    {
+        list_foreach_do(x, n, buf, step, 0);
+        list_foreach_do(x, argc - (n - 1), argv + (n - 1), step, n);
+    }
+    else
+    {
+        list_foreach_do(x, argc - (n - 1), argv + (n - 1), step, n);
+        list_foreach_do(x, n, buf, step, 0);
+    }
+    FREEA(t_atom, buf, n, LIST_NGETBYTE);
+}
+
+static void list_foreach_setup(void)
+{
+    list_foreach_class = class_new(gensym("list foreach"),
+        (t_newmethod)list_foreach_new, 0,
+        sizeof(t_list_foreach), 0, A_DEFFLOAT, 0);
+    class_addlist(list_foreach_class, list_foreach_list);
+    class_addanything(list_foreach_class, list_foreach_anything);
+    class_sethelpsymbol(list_foreach_class, &s_list);
+}
+
+/* ------------- list join ------------------- */
+
+t_class *list_join_class;
+
+typedef struct _list_join
+{
+    t_object x_obj;
+    t_symbol *x_delim;
+} t_list_join;
+
+    /* get the delimiter from the creation args */
+static t_symbol *list_join_getdelim(int argc, t_atom *argv)
+{
+    char tbuf[30];
+    if (argc)
+    {
+        switch (argv->a_type)
+        {
+        case A_FLOAT:
+            sprintf(tbuf, "%g", argv->a_w.w_float);
+            return gensym(tbuf);
+        case A_SYMBOL:
+            return argv->a_w.w_symbol;
+        default:
+            return &s_; /* shouldn't happen */
+        }
+    }
+    return gensym(" "); /* default */
+}
+
+static void *list_join_new(t_symbol *s, int argc, t_atom *argv)
+{
+    t_list_join *x = (t_list_join *)pd_new(list_join_class);
+    x->x_delim = list_join_getdelim(argc, argv);
+    symbolinlet_new(&x->x_obj, &x->x_delim);
+    outlet_new(&x->x_obj, &s_symbol);
+    return (x);
+}
+
+    /* returns the number of written characters (exluding the null-terminator) or -1
+    if the string (including the null-terminator) couldn't fit into the buffer */
+static int list_join_addatom(const t_atom *a, char *buf, int size)
+{
+    char tbuf[30];
+    const char* str;
+    int n;
+    if (size < 0)
+        return -1;
+
+    switch (a->a_type)
+    {
+    case A_FLOAT: /* see atom_string() */
+        sprintf(tbuf, "%g", a->a_w.w_float);
+        str = tbuf;
+        break;
+    case A_SYMBOL:
+        str = a->a_w.w_symbol->s_name;
+        break;
+    case A_POINTER:
+        str = "(pointer)";
+        break;
+    default:
+        return 0; /* shouldn't happen */
+    }
+
+    n = strlen(str);
+    if (n < size)
+    {
+        memcpy(buf, str, n + 1);
+        return n;
+    }
+    else
+        return -1;
+}
+
+static void list_join_list(t_list_join *x, t_symbol *s, int argc, t_atom *argv)
+{
+        /* initially use buffer on the stack, grow to the heap if needed */
+    char stackbuf[MAXPDSTRING], *buf = stackbuf;
+    const char *delim = x->x_delim->s_name;
+    int i, n, capacity = MAXPDSTRING, delimsize = strlen(delim);
+    *buf = 0; /* for empty lists */
+
+    for (i = 0, n = 0; i < argc; i++)
+    {
+        int advance;
+            /* make sure there is enough space for the atom + the seperator */
+        while ((advance = list_join_addatom(
+            &argv[i], buf + n, capacity - n - delimsize)) < 0)
+        {
+            int old = capacity;
+            capacity *= 2; /* grow by factor of 2 */
+                /* post("grow from %d to %d", old, capacity); */
+            if (buf == stackbuf)
+            {
+                    /* switch to heap allocation */
+                if (!(buf = getbytes(capacity)))
+                    return;
+                memcpy(buf, stackbuf, n);
+            }
+            else if (!(buf = resizebytes(buf, old, capacity)))
+                return;
+        }
+        n += advance;
+        if (i < (argc - 1))
+        {
+            memcpy(buf + n, delim, delimsize + 1); /* include null-terminator */
+            n += delimsize;
+        }
+    }
+
+    outlet_symbol(x->x_obj.ob_outlet, gensym(buf));
+
+    if (buf != stackbuf)
+        freebytes(buf, capacity);
+}
+
+static void list_join_anything(t_list_join *x, t_symbol *s, int argc, t_atom *argv)
+{
+    t_atom *vec;
+    ALLOCA(t_atom, vec, argc + 1, LIST_NGETBYTE);
+    SETSYMBOL(vec, s);
+    atoms_copy(argc, argv, vec + 1);
+    list_join_list(x, 0, argc + 1, vec);
+    FREEA(t_atom, vec, argc + 1, LIST_NGETBYTE);
+}
+
+static void list_join_setup(void)
+{
+    list_join_class = class_new(gensym("list join"),
+        (t_newmethod)list_join_new, 0,
+        sizeof(t_list_foreach), 0, A_GIMME, 0);
+    class_addlist(list_join_class, list_join_list);
+    class_addanything(list_join_class, list_join_anything);
+    class_sethelpsymbol(list_join_class, &s_list);
+}
+
+/* ------------- list unjoin ------------------- */
+
+t_class *list_unjoin_class;
+
+typedef struct _list_unjoin
+{
+    t_object x_obj;
+    t_symbol *x_delim;
+} t_list_unjoin;
+
+static void *list_unjoin_new(t_symbol *s, int argc, t_atom *argv)
+{
+    t_list_unjoin *x = (t_list_unjoin *)pd_new(list_unjoin_class);
+    x->x_delim = list_join_getdelim(argc, argv);
+    symbolinlet_new(&x->x_obj, &x->x_delim);
+    outlet_new(&x->x_obj, &s_symbol);
+    return (x);
+}
+
+    /* returns a pointer to the next substring or the end of the string.
+    ssize will contain the size of the current substring, excluding the
+    delimiter. */
+static const char *list_unjoin_parse(const char *s, t_atom *a,
+    const char *delim, int delimsize, int *ssize)
+{
+    const char c = *s, *next, *end;
+    size_t size;
+    if (delimsize) /* find delimiter */
+    {
+        end = s;
+        while (*end)
+        {
+            if (!strncmp(end, delim, delimsize))
+                break;
+            end++;
+        }
+        next = *end ? end + delimsize : end;
+        size = end - s;
+    }
+    else /* break into characters */
+    {
+        next = end = s + 1;
+        size = 1;
+    }
+        /* according to binbuf_text(), a Pd float
+        must start with a digit, dot, plus or minus */
+    if ((c >= '0' && c <= '9')
+        || c == '.' || c == '+' || c == '-')
+    {
+        char *p;
+        t_float f = strtod(s, &p);
+            /* we only consider it a float atom if there are no trailing
+            characters. This is in line with the FUDI message parsing rules. */
+        if (p == end)
+        {
+            SETFLOAT(a, f);
+            *ssize = size;
+            return next;
+        }
+    }
+        /* got a symbol */
+    if (size < MAXPDSTRING)
+    {
+        char buf[MAXPDSTRING];
+        memcpy(buf, s, size);
+        buf[size] = 0;
+        SETSYMBOL(a, gensym(buf));
+    }
+    else /* too large for the stack */
+    {
+        char *largebuf;
+        if ((largebuf = (char *)getbytes(size + 1)))
+        {
+            memcpy(largebuf, s, size);
+            largebuf[size] = 0;
+            SETSYMBOL(a, gensym(largebuf));
+            freebytes(largebuf, size + 1);
+        }
+        else
+            SETSYMBOL(a, &s_);
+    }
+    *ssize = size;
+    return next;
+}
+
+static void list_unjoin_symbol(t_list_unjoin *x, t_symbol *s)
+{
+        /* initially use buffer on the stack, grow to the heap if needed */
+    t_atom stackatoms[LIST_NGETBYTE], *outvec = stackatoms;
+    const char *substr = s->s_name, *delim = x->x_delim->s_name;
+    int outc = 0, capacity = LIST_NGETBYTE, delimsize = strlen(delim);
+
+        /* special case for empty symbol */
+    if (!(*substr))
+    {
+        outlet_list(x->x_obj.ob_outlet, &s_list, 0, 0);
+        return;
+    }
+
+    while (1)
+    {
+        t_atom atom;
+        int ssize = 0;
+        substr = list_unjoin_parse(substr, &atom, delim, delimsize, &ssize);
+        if (outc >= capacity)
+        {
+            int old = capacity;
+            capacity *= 2; /* grow by factor of 2 */
+                /* post("grow from %d to %d", old, capacity); */
+            if (outvec == stackatoms)
+            {
+                /* switch to heap allocation */
+                if (!(outvec = getbytes(capacity * sizeof(t_atom))))
+                    return;
+                memcpy(outvec, stackatoms, outc * sizeof(t_atom));
+            }
+            else
+            {
+                if (!(outvec = resizebytes(outvec, old * sizeof(t_atom),
+                    capacity * sizeof(t_atom))))
+                    return;
+            }
+        }
+            /* skip empty tokens */
+        if (ssize)
+            outvec[outc++] = atom;
+        if (*substr == '\0')
+            break;
+    }
+
+    outlet_list(x->x_obj.ob_outlet, &s_list, outc, outvec);
+
+    if (outvec != stackatoms)
+        freebytes(outvec, capacity * sizeof(t_atom));
+}
+
+static void list_unjoin_anything(t_list_unjoin *x, t_symbol *s, int argc, t_atom *argv)
+{
+    list_unjoin_symbol(x, s);
+}
+
+    /* catch bang, float and pointer messages */
+static void list_unjoin_list(t_list_unjoin *x, t_symbol *s, int argc, t_atom *argv)
+{
+    outlet_list(x->x_obj.ob_outlet, &s_list, 0, 0);
+}
+
+static void list_unjoin_setup(void)
+{
+    list_unjoin_class = class_new(gensym("list unjoin"),
+        (t_newmethod)list_unjoin_new, 0,
+        sizeof(t_list_foreach), 0, A_GIMME, 0);
+    class_addsymbol(list_unjoin_class, list_unjoin_symbol);
+    class_sethelpsymbol(list_unjoin_class, &s_list);
+}
+
 /* ------------- list ------------------- */
 
-static void *list_new(t_pd *dummy, t_symbol *s, int argc, t_atom *argv)
+void *list_new(t_pd *dummy, t_symbol *s, int argc, t_atom *argv)
 {
     if (!argc || argv[0].a_type != A_SYMBOL)
         pd_this->pd_newest = list_append_new(s, argc, argv);
@@ -865,6 +1256,12 @@ static void *list_new(t_pd *dummy, t_symbol *s, int argc, t_atom *argv)
             pd_this->pd_newest = list_tosymbol_new();
         else if (s2 == gensym("store"))
             pd_this->pd_newest = list_store_new(s, argc-1, argv+1);
+        else if (s2 == gensym("foreach"))
+            pd_this->pd_newest = list_foreach_new(atom_getfloatarg(1, argc, argv));
+        else if (s2 == gensym("join"))
+            pd_this->pd_newest = list_join_new(s, argc-1, argv+1);
+        else if (s2 == gensym("unjoin"))
+            pd_this->pd_newest = list_unjoin_new(s, argc-1, argv+1);
         else
         {
             pd_error(0, "list %s: unknown function", s2->s_name);
@@ -885,5 +1282,8 @@ void x_list_setup(void)
     list_length_setup();
     list_fromsymbol_setup();
     list_tosymbol_setup();
+    list_foreach_setup();
+    list_join_setup();
+    list_unjoin_setup();
     class_addcreator((t_newmethod)list_new, &s_list, A_GIMME, 0);
 }

@@ -7,9 +7,8 @@
 #include "m_pd.h"
 #include "s_stuff.h"
 #include "g_canvas.h"
-#include <math.h>
-#include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 #ifdef _WIN32
 #include <wtypes.h>
 #include <time.h>
@@ -24,7 +23,7 @@
 #if defined (__APPLE__) || defined (__FreeBSD__)
 #define CLOCKHZ CLK_TCK
 #endif
-#if defined (__linux__) || defined (__CYGWIN__) || defined (ANDROID)
+#if defined (__linux__) || defined (__CYGWIN__) || defined (ANDROID) || defined(__EMSCRIPTEN__)
 #define CLOCKHZ sysconf(_SC_CLK_TCK)
 #endif
 #if defined (__FreeBSD_kernel__) || defined(__GNU__) || defined(__OpenBSD__) \
@@ -33,13 +32,7 @@
 #define CLOCKHZ CLOCKS_PER_SEC
 #endif
 
-#ifdef _WIN32
-# include <malloc.h> /* MSVC or mingw on windows */
-#elif defined(__linux__) || defined(__APPLE__) || defined(HAVE_ALLOCA_H)
-# include <alloca.h> /* linux, mac, mingw, cygwin */
-#else
-# include <stdlib.h> /* BSDs for example */
-#endif
+#include "m_private_utils.h"
 
 /* -------------------------- random ------------------------------ */
 /* this is strictly homebrew and untested. */
@@ -83,7 +76,14 @@ static void random_bang(t_random *x)
     outlet_float(x->x_obj.ob_outlet, nval);
 }
 
-static void random_seed(t_random *x, t_float f, t_float glob)
+
+static void random_float(t_random *x, t_floatarg f)
+{
+    x->x_f = f;
+    random_bang(x);
+}
+
+static void random_seed(t_random *x, t_float f)
 {
     x->x_state = f;
 }
@@ -93,6 +93,7 @@ static void random_setup(void)
     random_class = class_new(gensym("random"), (t_newmethod)random_new, 0,
         sizeof(t_random), 0, A_DEFFLOAT, 0);
     class_addbang(random_class, random_bang);
+    class_addfloat(random_class, random_float);
     class_addmethod(random_class, (t_method)random_seed,
         gensym("seed"), A_FLOAT, 0);
 }
@@ -290,6 +291,8 @@ static t_class *oscparse_class;
 typedef struct _oscparse
 {
     t_object x_obj;
+    t_outlet *x_address_n;
+    int x_flag;
 } t_oscparse;
 
 #define ROUNDUPTO4(x) (((x) + 3) & (~3))
@@ -298,6 +301,22 @@ typedef struct _oscparse
                     ((((int)(((x)+1)->a_w.w_float)) & 0xff) << 16) | \
                     ((((int)(((x)+2)->a_w.w_float)) & 0xff) << 8) | \
                     ((((int)(((x)+3)->a_w.w_float)) & 0xff) << 0)
+
+PD_INLINE double readdouble(t_atom *x)
+{
+    uint32_t hi = READINT(x);
+    uint32_t lo = READINT((x)+4);
+    union {
+        double d;
+        struct {
+            uint32_t lo;
+            uint32_t hi;
+        } i;
+    } u;
+    u.i.lo = lo;
+    u.i.hi = hi;
+    return u.d;
+}
 
 static t_symbol *grabstring(int argc, t_atom *argv, int *ip, int slash)
 {
@@ -384,9 +403,23 @@ static void oscparse_list(t_oscparse *x, t_symbol *s, int argc, t_atom *argv)
     dataonset = ROUNDUPTO4(i + 1);
     /* post("outc %d, typeonset %d, dataonset %d, nfield %d", outc, typeonset,
         dataonset, nfield); */
+    int address_n = -1;
     for (i = j = 0; i < typeonset-1 && argv[i].a_w.w_float != 0 &&
-        j < outc; j++)
-            SETSYMBOL(outv+j, grabstring(argc, argv, &i, 1));
+         j < outc; j++)
+    {
+        if(x->x_flag)
+        {
+            t_symbol *sym = grabstring(argc, argv, &i, 1);
+            t_float f = 0.0f;
+            char *str_end = NULL;
+            f = strtod(sym->s_name, &str_end);
+            if (f == 0 && sym->s_name == str_end)
+                SETSYMBOL(outv+j, sym);
+            else SETFLOAT(outv+j, f);
+        }
+        else SETSYMBOL(outv+j, grabstring(argc, argv, &i, 1));
+        address_n = j + 1;
+    }
     for (i = typeonset, k = dataonset; i < typeonset + nfield; i++)
     {
         union
@@ -453,11 +486,30 @@ static void oscparse_list(t_oscparse *x, t_symbol *s, int argc, t_atom *argv)
                 SETFLOAT(outv+j, argv[k].a_w.w_float);
             k = ROUNDUPTO4(k);
             break;
+        case 'd':
+            if (k > argc - 8)
+                goto tooshort;
+            {
+                double d = readdouble(argv+k);
+                /* lossy conversion from double to float */
+                t_float f = (t_float)d;
+                if (PD_BADFLOAT(f))
+                    f = 0;
+                if (j >= outc)
+                {
+                    bug("oscparse double");
+                    return;
+                }
+                SETFLOAT(outv+j, f);
+                j++; k += 8;
+            }
+            break;
         default:
             pd_error(x, "oscparse: unknown tag '%c' (%d)",
                 (int)(argv[i].a_w.w_float), (int)(argv[i].a_w.w_float));
         }
     }
+    outlet_float(x->x_address_n, address_n);
     outlet_list(x->x_obj.ob_outlet, 0, j, outv);
     return;
 tooshort:
@@ -467,7 +519,13 @@ tooshort:
 static t_oscparse *oscparse_new(t_symbol *s, int argc, t_atom *argv)
 {
     t_oscparse *x = (t_oscparse *)pd_new(oscparse_class);
+    x->x_flag = 0;
+    if (argc && argv[0].a_w.w_symbol == gensym("-n"))
+    {
+        x->x_flag = 1;
+    }
     outlet_new(&x->x_obj, gensym("list"));
+    x->x_address_n = outlet_new((t_object *)x, &s_float);
     return (x);
 }
 
@@ -476,6 +534,7 @@ void oscparse_setup(void)
     oscparse_class = class_new(gensym("oscparse"), (t_newmethod)oscparse_new,
         0, sizeof(t_oscparse), 0, A_GIMME, 0);
     class_addlist(oscparse_class, oscparse_list);
+    class_sethelpsymbol(oscparse_class, gensym("osc-format-parse"));
 }
 
 /* --------- oscformat - format simple OSC messages -------------- */
@@ -691,6 +750,7 @@ void oscformat_setup(void)
     class_addmethod(oscformat_class, (t_method)oscformat_format,
         gensym("format"), A_DEFSYM, 0);
     class_addlist(oscformat_class, oscformat_list);
+    class_sethelpsymbol(oscformat_class, gensym("osc-format-parse"));
 }
 
 
@@ -780,8 +840,9 @@ void fudiparse_setup(void) {
                               sizeof(t_fudiparse), CLASS_DEFAULT,
                               0);
   class_addlist(fudiparse_class, fudiparse_list);
+  class_sethelpsymbol(fudiparse_class, gensym("fudi-format-parse"));
 }
-/* --------- oscformat - format Pd (FUDI) messages to bytelists ------------ */
+/* --------- fudiformat - format Pd (FUDI) messages to bytelists ------------ */
 
 static t_class *fudiformat_class;
 
@@ -853,6 +914,7 @@ static void fudiformat_setup(void) {
                                sizeof(t_fudiformat), CLASS_DEFAULT,
                                A_DEFSYMBOL, 0);
   class_addanything(fudiformat_class, fudiformat_any);
+  class_sethelpsymbol(fudiformat_class, gensym("fudi-format-parse"));
 }
 
 

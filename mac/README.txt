@@ -61,7 +61,7 @@ argument, a "Pd.app" is built. The version argument is only used as a suffix to
 the file name and contextual version info is pulled from configure script
 output.
 
-A pre-built universal (32/64 bit) Tk 8.6.10 Wish with patches applied is
+A pre-built universal (32/64 bit) Tk 8.6.10+ Wish with patches applied is
 included with the Pd source distribution and works across the majority of macOS
 versions up to 10.15. This is the default Wish.app when using osx-app.sh. If you
 want to use a different Wish.app (a newer version, a custom build, a system
@@ -103,7 +103,7 @@ embedded Wish.apps you need with tcltk-wish.sh can save you some time as they
 can be reused when (re)making the Pd .app bundle.
 
 Usually, it's best to use stable releases of Tcl/Tk. However, there are times
-when building from the current development version is useful. For instance, 
+when building from the current development version is useful. For instance,
 if there is a bug in the Tcl/Tk sources and the generated Wish.app crashes on
 your system, you can then see if there is a fix for this in the Tcl/Tk
 development version on GitHub. If so, then you can test by using the
@@ -149,26 +149,26 @@ automatically on your system so I wouldn't have to include it here.
 The Pure Data preferences are saved in the macOS "defaults" preference system
 using the following domains:
 
-* org.puredata.pd: core settings (audio devices, search paths, etc)
-* org.puredata.pd.pd-gui: GUI settings (recent files, last opened location, etc)
+* info.puredata.pd: core settings (audio devices, search paths, etc)
+* info.puredata.pd.pd-gui: GUI settings (recent files, last opened location, etc)
 
 The files themselves live in your user home folder and use the .plist extension:
 
-    ~/Library/Preferences/org.puredata.pd.plist
-    ~/Library/Preferences/org.puredata.pd.pd-gui.plist
+    ~/Library/Preferences/info.puredata.pd.plist
+    ~/Library/Preferences/info.puredata.pd.pd-gui.plist
 
 These files use the Apple Property List XML format and shouldn't be edited
 directly. You can look inside, edit, and/or delete these using the "defaults"
 commandline utility in Terminal:
 
     # print the contents of the core settings
-    defaults read org.puredata.pd
+    defaults read info.puredata.pd
 
     # delete the current GUI settings
-    defaults delete org.puredata.pd.pd-gui
+    defaults delete info.puredata.pd.pd-gui
 
     # set the startup flag in the core settings
-    defaults write org.puredata.pd -array-add flags '-lib Gem'
+    defaults write info.puredata.pd -array-add flags '-lib Gem'
 
 Some important per-application settings required by the GUI include:
 
@@ -213,16 +213,16 @@ They can also be reset on the commandline using the "tccutil" command and the
 Pd .app bundle id:
 
     # reset Pd's Microphone privacy setting
-    tccutil reset Microphone org.puredata.pd.pd-gui
+    tccutil reset Microphone info.puredata.pd.pd-gui
 
     # reset all of Pd's privacy settings
-    tccutil reset All org.puredata.pd.pd-gui
+    tccutil reset All info.puredata.pd.pd-gui
 
 ## Font Issues with macOS 10.15+
 
 macOS 10.15 furthered changes to font rendering begin with 10.14 with the weird
 result that Pd's default font, DejaVu Sans Mono, renders thin and closer
-together than system fonts. This results in objects on the patch canvas that are 
+together than system fonts. This results in objects on the patch canvas that are
 longer their inner text and text selection positioning is off.
 
 To remedy this for now, Pd 0.51-3 changed Pd's default font for macOS to Menlo
@@ -234,5 +234,39 @@ positioning.
 
 Pd currently disables Dark Mode support by setting the
 NSRequiresAquaSystemAppearance key to true in both the app bundle's Info.plist
-and the GUI defaults preference file. This restruction may be removed in the
+and the GUI defaults preference file. This restriction may be removed in the
 future once Dark Mode is handled in the GUI.
+
+## Debugging Releases
+
+On macOS 10.15+, apps must be signed with an entitlement to allow debugging.
+This is good for security, but bad if you want to run Pd in lldb to figure out
+why your custom external is crashing.
+
+To make this work, the entitlement can be added to an existing Pd release .app
+bundle using the codesign command in Terminal (steps by Pierre Alexandre
+Tremblay):
+
+1. Extract the current Pd entitlements from the internal pd binary:
+
+    codesign -d /Applications/Pd-0.53-2.app/Contents/Resources/bin/pd \
+        --entitlements :~/Desktop/pd-entitlements.xml
+
+2. Edit pd-entitlements.xml on your Desktop, add the following key, and save:
+
+    <key>com.apple.security.get-task-allow</key>
+    <true/>
+
+3. Re-sign the pd binary with the updated entitlements:
+
+    codesign -s - --deep --force --options=runtime \
+        --entitlements ~/Desktop/pd-entitlements.xml \
+        /Applications/Pd-0.53-2.app/Contents/Resources/bin/pd
+
+Now Pd can be run with lldb using:
+
+    lldb /Applications/Pd-0.53-2.app/Contents/Resources/bin/pd
+
+Note: Re-signing using an ad-hoc identifier will work on the development system,
+      but running the Pd .app bundle on another system will result in security
+      warnings as the original signature and notarization are invalid.

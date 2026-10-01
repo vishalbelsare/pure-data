@@ -15,5 +15,17 @@ makefile.  To build and run the test program:
     make
     ./test_libpd
 
-Note: On Windows, the makefile will try to find the libwinpthread-1.dll included
-      with MinGW and copy it to the test_libpd directory to run the example.
+On Windows, the test_libpd makefile will try to find the libwinpthread-1.dll
+included with MinGW and copy it to the test_libpd directory to run the example.
+
+On macOS and Linux, the test_libpd makefile can statically link libpd by using:
+
+    make STATIC=true
+
+If you run into linker errors, first try cleaning the main Pd source directory,
+then re-running make. For example:
+
+    cd ../
+    make clean
+    cd libpd
+    make

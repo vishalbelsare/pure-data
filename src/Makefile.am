@@ -2,36 +2,51 @@
 ##### Defaults & Paths #####
 
 AUTOMAKE_OPTIONS = foreign
-CLEANFILES=
+CLEANFILES =
 
 bin_SCRIPTS =
 noinst_SCRIPTS =
 
-pd_CFLAGS = -DPD -DINSTALL_PREFIX=\"$(prefix)\" -DPD_INTERNAL
-pd_LDFLAGS =
+AM_CPPFLAGS = @PD_CPPFLAGS@
+AM_CFLAGS = @PD_CFLAGS@
+AM_LDFLAGS = @PD_LDFLAGS@
+
+pd_CFLAGS = -DPD -DPD_INTERNAL -DINSTALL_PREFIX=\"$(prefix)\" @PD_CFLAGS@
+pd_LDFLAGS = @PD_LDFLAGS@
 pd_LDADD =
-libpd_la_CPPFLAGS = -DPD -DPD_INTERNAL -DUSEAPI_DUMMY
+
+libpd_la_CPPFLAGS = -DPD -DPD_INTERNAL -DUSEAPI_DUMMY @PD_CPPFLAGS@
+libpd_la_CFLAGS = @PD_CFLAGS@
 libpd_la_LIBADD =
-libpd_la_LDFLAGS =
-libpdincludedir = $(includedir)/libpd
+libpd_la_LDFLAGS = @PD_LDFLAGS@
+libpdincludedir = $(pkgincludedir)
 libpdinclude_HEADERS =
+
+libpdbin_PROGRAMS =
 
 # there are pd_* and pd_*_core variables as we need different flags on Windows
 # for the DLL and the EXE, other OSes simply set pd_* = $(pd_*_core) later
 # also, the "_core" suffix is used as this keeps automake from thinking these
 # are library or binary variables since we only need them as placeholders
-pd_LDFLAGS_core =
+pd_LDFLAGS_core = @PD_LDFLAGS@
 pd_LDADD_core =
-pd_LDFLAGS_standalone =
+pd_LDFLAGS_standalone = @PD_LDFLAGS@
 pd_LDADD_standalone =
 
-pdsend_CFLAGS =
-pdreceive_CFLAGS =
-pd_watchdog_CFLAGS =
+pdsend_CFLAGS = @PD_CFLAGS@
+pdreceive_CFLAGS = @PD_CFLAGS@
+pd_watchdog_CFLAGS = @PD_CFLAGS@
 
 LIBS = @LIBS@
 
 SUFFIXES = .@EXTENSION@ .@SHARED_LIB@
+
+
+pd_LDADD_core += $(LIBM)
+libpd_la_LIBADD += $(LIBM)
+
+# in case somebody passes '--program-transform-name' to configure
+pd_transformed=$(shell echo pd | sed -e '$(transform)')
 
 #########################################
 ##### Files, Binaries, & Libs #####
@@ -41,6 +56,12 @@ bin_PROGRAMS = pd pdsend pdreceive
 
 if LIBPD
 lib_LTLIBRARIES = libpd.la
+endif
+
+if PD_WATCHDOG
+# install watchdog to $(libdir)/pd/bin as it's not a user facing program
+libpdbin_PROGRAMS += pd-watchdog
+pd_CFLAGS += -DPD_WATCHDOG=1
 endif
 
 pdsend_SOURCES = u_pdsend.c s_net.c
@@ -87,8 +108,6 @@ libpd_la_SOURCES += \
     $(empty)
 endif
 
-
-
 # on Windows, pd.exe contains only s_entry.c and links against pd.dll
 # (where all the logic resides), that's why we have to split the sources
 # (only to later merge them again for non-Windows systems)
@@ -121,21 +140,19 @@ pd_SOURCES_core = \
     g_editor_extras.c \
     g_graph.c \
     g_guiconnect.c \
-    g_hdial.c \
-    g_hslider.c \
     g_io.c \
     g_mycanvas.c \
     g_numbox.c \
+    g_radio.c \
     g_readwrite.c \
     g_rtext.c \
     g_scalar.c \
+    g_slider.c \
     g_template.c \
     g_text.c \
     g_toggle.c \
     g_traversal.c \
     g_undo.c \
-    g_vdial.c \
-    g_vslider.c \
     g_vumeter.c \
     m_atom.c \
     m_binbuf.c \
@@ -148,6 +165,7 @@ pd_SOURCES_core = \
     m_sched.c \
     s_audio.c \
     s_inter.c \
+    s_inter_gui.c \
     s_loader.c \
     s_main.c \
     s_net.c \
@@ -187,8 +205,9 @@ pkginclude_HEADERS = m_pd.h m_imp.h g_canvas.h g_undo.h g_all_guis.h s_stuff.h \
 
 # compatibility: m_pd.h also goes into ${includedir}/
 include_HEADERS = m_pd.h
-noinst_HEADERS = s_audio_alsa.h s_audio_paring.h s_utf8.h
+noinst_HEADERS = s_audio_alsa.h s_audio_paring.h s_utf8.h m_private_utils.h
 noinst_HEADERS += z_hooks.h z_ringbuffer.h x_libpdreceive.h
+noinst_HEADERS += m_dispatch.h d_osc.h
 
 if LIBPD
 libpdinclude_HEADERS += m_pd.h z_libpd.h
@@ -199,13 +218,25 @@ endif
 
 # we want these in the dist tarball
 EXTRA_DIST = CHANGELOG.txt notes.txt pd.rc \
-    makefile.gnu  makefile.mac  makefile.mingw  makefile.msvc \
-    d_soundfile.h s_audio_audiounit.c s_audio_esd.c
+    makefile.gnu makefile.mac makefile.mingw makefile.msvc \
+    d_soundfile.h s_audio_audiounit.c s_audio_esd.c \
+    m_dispatch_gen.c
 
 # add WISH define if it's set
 WISH=@WISH@
 WISHDEFINE=$(if $(WISH),-DWISH='"$(WISH)"')
 pd_CFLAGS += $(WISHDEFINE)
+
+# deken specifiers (if set)
+DEKEN_OS=@DEKEN_OS@
+DEKEN_CPU=@DEKEN_CPU@
+DEKEN_DEFINE=
+DEKEN_DEFINE+=$(if $(DEKEN_OS),-DDEKEN_OS="'$(DEKEN_OS)'")
+DEKEN_DEFINE+=$(if $(DEKEN_CPU),-DDEKEN_CPU="'$(DEKEN_CPU)'")
+pd_CFLAGS += $(DEKEN_DEFINE)
+
+
+DEKEN_DEFINE+=$(if $(EXTERNAL_EXTENSION),-DEXTERNAL_EXTENSION="'.$(EXTERNAL_EXTENSION)'")
 
 #########################################
 ##### Configurations Per Library #####
@@ -227,7 +258,7 @@ endif
 ##### Jack Audio Connection Kit #####
 # TODO support Jack xrun
 if JACK
-pd_CFLAGS += -DUSEAPI_JACK -DJACK_XRUN
+pd_CFLAGS += -DUSEAPI_JACK -DJACK_XRUN @JACK_CFLAGS@
 pd_SOURCES_standalone += s_audio_jack.c
 
 if JACK_FRAMEWORK
@@ -244,6 +275,7 @@ endif
 if OSS
 pd_CFLAGS += -DUSEAPI_OSS
 pd_SOURCES_standalone += s_audio_oss.c s_midi_oss.c
+pd_LDADD_standalone += @OSS_LIBS@
 endif
 
 ##### Windows MultiMedia (File) I/O #####
@@ -302,7 +334,7 @@ endif
 
 endif
 
-
+##### Jack Audio Connection Kit #####
 if JACK
 pd_SOURCES_standalone += s_audio_paring.c
 else !JACK
@@ -311,6 +343,13 @@ pd_SOURCES_standalone += s_audio_paring.c
 endif PORTAUDIO
 endif !JACK
 
+
+##### IRIX #####
+if SGI
+pd_CFLAGS += -DUSEAPI_SGI
+pd_SOURCES_standalone += s_audio_sgi.c s_midi_sgi.c
+pd_LDADD_standalone += @SGI_LIBS@
+endif
 
 ##### NO API? #####
 # if no audio or midi api was detected/specified, fall back to dummy apis
@@ -327,6 +366,9 @@ endif
 ##### FFTW fft library #####
 if FFTW
 pd_SOURCES_core += d_fft_fftw.c
+pd_CFLAGS += $(FFTW_CFLAGS)
+pd_LDADD_core += $(FFTW_LIBS)
+libpd_la_LIBADD += $(FFTW_LIBS)
 else
 pd_SOURCES_core += d_fft_fftsg.c
 endif
@@ -334,60 +376,27 @@ endif
 #########################################
 ##### Configurations Per Platform #####
 
-##### GNU/Hurd #####
-if HURD
-
-# install watchdog to $(libdir)/pd/bin as it's not a user facing program
-libpdbin_PROGRAMS = pd-watchdog
-
+if !WINDOWS
 # this flag has to have a single leading "-" for libtool, even though ld uses
 # --export-dynamic, and libtool sends -Wl,--export-dynamic to ld...
 pd_LDFLAGS_core += -export-dynamic
-
-# on Ubuntu/Karmic 9.10, it doesn't seem to find libm, so force it
-pd_LDFLAGS_core += $(LIBM)
-libpd_la_LIBADD += $(LIBM)
-
-# force linking to pthread, which should really be done with some autotools way
-pd_LDFLAGS_core += -lpthread
-libpd_la_LIBADD += -lpthread
-
-# force linking to dl, which should really be done with some autotools way
-pd_LDFLAGS_core += -ldl
-libpd_la_LIBADD += -ldl
-
-endif
-
-##### GNU/Linux #####
-if LINUX
-
-# install watchdog to $(libdir)/pd/bin as it's not a user facing program
-libpdbin_PROGRAMS = pd-watchdog
-
-# this flag has to have a single leading "-" for libtool, even though ld uses
-# --export-dynamic, and libtool sends -Wl,--export-dynamic to ld...
-pd_LDFLAGS_core += -export-dynamic
-
-# on Ubuntu/Karmic 9.10, it doesn't seem to find libm, so force it
-pd_LDFLAGS_core += $(LIBM)
-libpd_la_LIBADD += $(LIBM)
-
 endif
 
 ##### Apple Mac OSX #####
 if MACOSX
-
-# install watchdog to $(libdir)/pd/bin as it's not a user facing program
-libpdbin_PROGRAMS = pd-watchdog
 
 # kludge, should use auto macro __APPLE__
 # but who knows what externals rely on this
 pd_CFLAGS += -DMACOSX
 
 # for dynamic loading & threading
-LIBS += -ldl -lm -lpthread -framework CoreFoundation
-libpd_la_LIBADD += -ldl -lm -lpthread
+LIBS += -framework CoreFoundation
 libpd_la_LDFLAGS += -framework CoreFoundation
+
+# PERTHREAD requires macOS 10.9+ SDK
+if LIBPD_MULTIINSTANCE
+libpd_la_CFLAGS += -mmacosx-version-min=10.9
+endif
 
 endif
 
@@ -397,16 +406,16 @@ if WINDOWS
 # win32 sockets 2, multimedia, and all that
 LIBS += -lws2_32 -lwinmm -lole32 -static-libgcc -static-libstdc++
 
-bin_SCRIPTS += pd.dll pd.lib pd.def pd.com
-CLEANFILES += pd.dll pd.lib pd.def pd.com
-noinst_SCRIPTS += libpd.a
-CLEANFILES += libpd.a
+bin_SCRIPTS += $(pd_transformed).dll $(pd_transformed).lib $(pd_transformed).def $(pd_transformed).com
+CLEANFILES += $(pd_transformed).dll $(pd_transformed).lib $(pd_transformed).def $(pd_transformed).com
+noinst_SCRIPTS += lib$(pd_transformed).a
+CLEANFILES += lib$(pd_transformed).a
 CLEANFILES += pd.res
 
 # hide the console
 pd_LDFLAGS += -mwindows
 # link with resources and pd.dll import library
-pd_LDADD += pd.res pd.lib
+pd_LDADD += pd.res $(pd_transformed).lib
 
 libpd_la_LDFLAGS += -Wl,--export-all-symbols -static-libgcc
 libpd_la_LIBADD += -lws2_32 -lkernel32
@@ -423,28 +432,28 @@ pd.res: pd.rc
 	$(WINDRES) $< -O coff -o $@
 
 # import library for pd.dll. also works with MSVC!
-pd.lib: pd.dll
+$(pd_transformed).lib: $(pd_transformed).dll
+$(pd_transformed).def: $(pd_transformed).dll
 
 # another import library (when linking with -lpd), the same as pd.lib.
-libpd.a: pd.lib
+lib$(pd_transformed).a: $(pd_transformed).lib
 	cp $< $@
 
-pd.def: pd.dll
-
-pd.dll: $(pd_OBJECTS_core) $(pd_OBJECTS_standalone)
+$(pd_transformed).dll: $(pd_OBJECTS_core) $(pd_OBJECTS_standalone)
 	$(CXX) -shared \
 	$(pd_LDFLAGS_core) $(pd_LDFLAGS_standalone) \
-	-o pd.dll \
+	-o $@ \
 	$(pd_OBJECTS_core) $(pd_OBJECTS_standalone) \
 	$(pd_LDADD_core) $(pd_LDADD_standalone) \
 	$(LIBS) \
-	-Wl,--export-all-symbols -Wl,--out-implib=pd.lib -Wl,--output-def=pd.def
+	-Wl,--export-all-symbols \
+    -Wl,--out-implib=$(patsubst %.dll,%.lib,$@) -Wl,--output-def=$(patsubst %.dll,%.def,$@)
 
 # same as pd.exe but without -mwindows and resources
 # NOTE: this is a bit ugly. I couldn't figure out how to get automake to build
 # two programs with the same basename but different suffix.
-pd.com: pd-s_entry.o pd.lib
-	$(CXX) $(LDFLAGS) -o pd.com pd-s_entry.o $(LIBS) pd.lib
+$(pd_transformed).com: pd-s_entry.o $(pd_transformed).lib
+	$(CXX) $(LDFLAGS) -o $@ $^ $(LIBS)
 
 else
 # for other OS, join pd_* with pd_*_core
@@ -493,8 +502,9 @@ clean-local:
 # we remove any existing symlink if doing a repeated install.
 install-exec-hook:
 	$(MKDIR_P) $(DESTDIR)$(libpdbindir)
-	rm -f $(DESTDIR)$(libpdbindir)/pd
-	$(LN_S) $(DESTDIR)$(bindir)/pd $(DESTDIR)$(libpdbindir)/pd
+	test "$(bindir)" = "$(libpdbindir)" || $(LN_S) -f $(DESTDIR)$(bindir)/$(pd_transformed)$(EXEEXT) $(DESTDIR)$(libpdbindir)/$(pd_transformed)$(EXEEXT)
+#  try to create relative symlinks (doesn't work on macOS)
+	-test "$(bindir)" = "$(libpdbindir)" || $(LN_S) -f --relative $(DESTDIR)$(bindir)/$(pd_transformed)$(EXEEXT) $(DESTDIR)$(libpdbindir)/$(pd_transformed)$(EXEEXT)
 
 # remove the $(libdir)/pd/bin link
 # &

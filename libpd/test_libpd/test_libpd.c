@@ -15,29 +15,84 @@ void pdnoteon(int ch, int pitch, int vel) {
   printf("noteon: %d %d %d\n", ch, pitch, vel);
 }
 
+t_class *test_class;
+
+typedef struct _test
+{
+    t_object x_obj;
+} t_test;
+
+typedef struct _test_data
+{
+    int x_count;
+} t_test_data;
+
+void test_data_free(t_test_data *data)
+{
+    post("free data for 'test' class");
+    freebytes(data, sizeof(*data));
+}
+
+void *test_new(void)
+{
+    t_test *x = (t_test *)pd_new(test_class);
+
+        /* lazily create per-instance data */
+    t_test_data *data = class_getinstancedata(test_class);
+    if (!data)
+    {
+        data = (t_test_data*)getbytes(sizeof(*data));
+        data->x_count = 0;
+        class_setinstancedata(test_class, data,
+            (t_classdatafn)test_data_free);
+    }
+    data->x_count++;
+    post("test new: %d objects", data->x_count);
+
+    return x;
+}
+
+void test_free(t_test *x)
+{
+    t_test_data *data = class_getinstancedata(test_class);
+    data->x_count--;
+    post("test free: %d remaining objects", data->x_count);
+}
+
+void setup_test(void)
+{
+    test_class = class_new(gensym("test"),
+        (t_newmethod)test_new, (t_method)test_free, sizeof(t_test), 0, 0);
+}
+
 int main(int argc, char **argv) {
     t_pdinstance *pd1, *pd2;
     int srate = 48000;
         /* one input channel, two output channels,
            block size 64, one tick per buffer: */
     float inbuf[64], outbuf[128];
-    char *filename = "test2.pd", *dirname = ".";
+    char *filename = "test_libpd.pd", *dirname = ".";
 
     /* accept overrides from the commandline:
        $ pdtest_multi file.pd ../dir */
     if (argc > 1) filename = argv[1];
     if (argc > 2) dirname = argv[2];
 
-        /* maybe these two calls should be available per-instance somehow: */
+        /* If called *before* libpd_init(), this will set
+           the global printhook. It can also be set per
+           instance, see libpd_set_noteonhook() below. */
     libpd_set_printhook(pdprint);
-    libpd_set_noteonhook(pdnoteon);
 
     libpd_init();
+
+    setup_test();
 
     pd1 = libpd_new_instance();
     pd2 = libpd_new_instance();
 
     libpd_set_instance(pd1); /* talk to first pd instance */
+
+    libpd_set_noteonhook(pdnoteon); /* set note-on-hook (per instance) */
 
     libpd_init_audio(1, 2, srate);
         /* send message:  [; pd dsp 1(   */
@@ -50,6 +105,7 @@ int main(int argc, char **argv) {
 
         /* repeat this all for the second instance */
     libpd_set_instance(pd2);
+    libpd_set_noteonhook(pdnoteon);
     libpd_init_audio(1, 2, srate);
     libpd_start_message(1);
     libpd_add_float(1.0f);

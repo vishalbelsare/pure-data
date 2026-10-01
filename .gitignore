@@ -6,6 +6,7 @@ src/pdreceive
 src/pdsend
 *.app
 *.exe
+pdgtk
 
 # autotools
 autom4te.cache
@@ -27,6 +28,7 @@ tcl/pd-gui
 
 # build
 *.o
+*.obj
 lib*.a
 
 # libtool
@@ -36,11 +38,11 @@ lib*.a
 *.la
 
 # externals
-*.pd_linux
-*.pd_darwin
+*.pd_*
 *.d_fat
 *.d_fat_o
 *.dll
+*.so
 
 # windows build artifacts
 src/*.com
@@ -55,6 +57,7 @@ src/*.a
 # distribution tarballs
 pd-0.*
 msw/0.*
+msw/pdprototype/*
 
 # gettext
 po/*.msg

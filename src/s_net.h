@@ -13,6 +13,7 @@ typedef int socklen_t;
 #else
 #include <arpa/inet.h>
 #include <sys/socket.h>
+#include <sys/select.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <netdb.h>
@@ -70,7 +71,6 @@ typedef int socklen_t;
             return;
         }
     */
-
 int addrinfo_get_list(struct addrinfo **ailist, const char *hostname,
                       int port, int protocol);
 

@@ -35,8 +35,12 @@ proc ::pd_menucommands::menu_open {} {
 # TODO set the current font family & size via the -fontmap option:
 # http://wiki.tcl.tk/41871
 proc ::pd_menucommands::menu_print {mytoplevel} {
+    if { [winfo exists ${mytoplevel}] } {
+        set mytoplevel [winfo toplevel ${mytoplevel}]
+    }
     set initialfile "[file rootname [lookup_windowname $mytoplevel]].ps"
     set filename [tk_getSaveFile -initialfile $initialfile \
+                      -title [_ "Print..." ] \
                       -defaultextension .ps \
                       -filetypes { {{Postscript} {.ps}} }]
     if {$filename ne ""} {
@@ -71,13 +75,15 @@ proc ::pd_menucommands::menu_print {mytoplevel} {
 # functions called from Edit menu
 
 proc ::pd_menucommands::menu_undo {} {
-    if { $::focused_window ne ".pdwindow" } {
+    set mytoplevel [winfo toplevel $::focused_window]
+    if {[winfo class $mytoplevel] eq "PatchWindow"} {
         pdsend "$::focused_window undo"
     }
 }
 
 proc ::pd_menucommands::menu_redo {} {
-    if { $::focused_window ne ".pdwindow" } {
+    set mytoplevel [winfo toplevel $::focused_window]
+    if {[winfo class $mytoplevel] eq "PatchWindow"} {
         pdsend "$::focused_window redo"
     }
 }
@@ -164,6 +170,10 @@ proc ::pd_menucommands::menu_startup_dialog {} {
     }
 }
 
+proc ::pd_menucommands::menu_preference_dialog {} {
+    pdsend "pd start-preference-dialog"
+}
+
 proc ::pd_menucommands::menu_manual {} {
     ::pd_menucommands::menu_doc_open doc/1.manual index.htm
 }
@@ -230,8 +240,32 @@ proc ::pd_menucommands::set_filenewdir {mytoplevel} {
 
 # parse the textfile for the About Pd page
 proc ::pd_menucommands::menu_aboutpd {} {
-    set versionstring "Pd $::PD_MAJOR_VERSION.$::PD_MINOR_VERSION.$::PD_BUGFIX_VERSION$::PD_TEST_VERSION"
-    set filename "$::sys_libdir/doc/1.manual/1.introduction.txt"
+    set versionstring "$::PD_APPLICATION_NAME $::PD_MAJOR_VERSION.$::PD_MINOR_VERSION.$::PD_BUGFIX_VERSION$::PD_TEST_VERSION"
+
+    # add the architecture to the version-string
+    set precision ""
+    if { [info exists ::deken::platform(floatsize)] } {
+        switch -- ${::deken::platform(floatsize)} {
+            32 { set precision [_ "single precision"] }
+            64 { set precision [_ "double precision"] }
+            "" { set precision ""}
+            default  { set precision [_ "%dbit-floats" ${::deken::platform(floatsize)}]}
+        }
+    }
+    if { ${precision} ne "" } {
+        set precision " - $precision"
+    }
+
+    if {[info exists ::deken::platform(os)]} {
+        set versionstring "$versionstring ($::deken::platform(os)/$::deken::platform(machine)${precision})"
+    }
+
+    set filename [file join $::sys_guidir about.txt]
+    if {![file exists $filename]} {
+        ::pdwindow::error [_ "ignoring '%s': doesn't exist" $filename]
+        ::pdwindow::error "\n"
+        #return
+    }
     if {[winfo exists .aboutpd]} {
         wm deiconify .aboutpd
         raise .aboutpd
@@ -240,7 +274,7 @@ proc ::pd_menucommands::menu_aboutpd {} {
         toplevel .aboutpd -class TextWindow
         wm title .aboutpd [_ "About Pd"]
         wm group .aboutpd .
-        .aboutpd configure -menu $::dialog_menubar
+        ::pd_menus::menubar_for_dialog .aboutpd
         text .aboutpd.text -relief flat -borderwidth 0 -highlightthickness 0 \
             -yscrollcommand ".aboutpd.scroll set" -background white
         scrollbar .aboutpd.scroll -command ".aboutpd.text yview"
@@ -248,14 +282,20 @@ proc ::pd_menucommands::menu_aboutpd {} {
         pack .aboutpd.text -side left -fill both -expand 1
         bind .aboutpd <$::modifier-Key-w> "destroy .aboutpd"
 
-        set textfile [open $filename]
-        while {![eof $textfile]} {
-            set bigstring [read $textfile 1000]
-            regsub -all PD_BASEDIR $bigstring $::sys_libdir bigstring2
-            regsub -all PD_VERSION $bigstring2 $versionstring bigstring3
-            .aboutpd.text insert end $bigstring3
+        if { [catch {
+            set textfile [open $filename]
+            while {![eof $textfile]} {
+                set bigstring [read $textfile 1000]
+                regsub -all PD_BASEDIR $bigstring $::sys_libdir bigstring
+                regsub -all PD_VERSION $bigstring $versionstring bigstring
+                .aboutpd.text insert end $bigstring
+            }
+            close $textfile
+        } stderr ] } {
+            ::pdwindow::error [_ "couldn't read \"%s\" document" [_ "About Pd" ] ]
+            ::pdwindow::error "\n\t$stderr\n"
+            destroy .aboutpd
         }
-        close $textfile
     }
 }
 

@@ -9,6 +9,14 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <limits.h>
+#include <ctype.h>
+
+#ifdef _WIN32
+# include <malloc.h> /* MSVC or mingw on windows */
+#elif defined(__linux__) || defined(__APPLE__) || defined(HAVE_ALLOCA_H)
+# include <alloca.h> /* linux, mac, mingw, cygwin */
+#endif
 
 /* -------------------------- int ------------------------------ */
 static t_class *pdint_class;
@@ -69,7 +77,7 @@ typedef struct _pdfloat
     they're created by short-circuited messages to the "new"
     object which are handled specially in pd_typedmess(). */
 
-static void *pdfloat_new(t_pd *dummy, t_float f)
+void *pdfloat_new(t_pd *dummy, t_float f)
 {
     t_pdfloat *x = (t_pdfloat *)pd_new(pdfloat_class);
     x->x_f = f;
@@ -101,7 +109,17 @@ static void pdfloat_symbol(t_pdfloat *x, t_symbol *s)
     char *str_end = NULL;
     f = strtod(s->s_name, &str_end);
     if (f == 0 && s->s_name == str_end)
-        pd_error(x, "couldn't convert %s to float", s->s_name);
+    {
+        /* OK, try to find an internal number, which must start with a
+        digit.  (numbers starting with '-' or '.' aren't matched correctly.) */
+        int i, len = strlen(s->s_name);
+        for (i = 0; i < len && !isdigit(s->s_name[i]); i++)
+            ;
+        if (i >= len || ((f = strtod(s->s_name+i, &str_end)) != 0) &&
+            str_end == s->s_name+i)
+                pd_error(x, "couldn't convert %s to float", s->s_name);
+        else outlet_float(x->x_obj.ob_outlet, x->x_f = f);
+    }
     else outlet_float(x->x_obj.ob_outlet, x->x_f = f);
 }
 
@@ -133,7 +151,7 @@ typedef struct _pdsymbol
     t_symbol *x_s;
 } t_pdsymbol;
 
-static void *pdsymbol_new(t_pd *dummy, t_symbol *s)
+void *pdsymbol_new(t_pd *dummy, t_symbol *s)
 {
     t_pdsymbol *x = (t_pdsymbol *)pd_new(pdsymbol_class);
     x->x_s = s;
@@ -191,7 +209,7 @@ typedef struct _bang
     t_object x_obj;
 } t_bang;
 
-static void *bang_new(t_pd *dummy)
+void *bang_new(t_pd *dummy)
 {
     t_bang *x = (t_bang *)pd_new(bang_class);
     outlet_new(&x->x_obj, &s_bang);
@@ -199,7 +217,7 @@ static void *bang_new(t_pd *dummy)
     return (x);
 }
 
-static void *bang_new2(t_bang f)
+static void *bang_new2(void)
 {
     return (bang_new(0));
 }
@@ -209,16 +227,31 @@ static void bang_bang(t_bang *x)
     outlet_bang(x->x_obj.ob_outlet);
 }
 
+static void bang_float(t_bang *x, t_float dummy)
+{
+    bang_bang(x);
+}
+
+static void bang_symbol(t_bang *x, t_symbol *dummy)
+{
+    bang_bang(x);
+}
+
+static void bang_gimme(t_bang *x, t_symbol *s, int argc, t_atom *argv)
+{
+    bang_bang(x);
+}
+
 void bang_setup(void)
 {
     bang_class = class_new(gensym("bang"), (t_newmethod)bang_new, 0,
         sizeof(t_bang), 0, 0);
     class_addcreator((t_newmethod)bang_new2, gensym("b"), 0);
     class_addbang(bang_class, bang_bang);
-    class_addfloat(bang_class, bang_bang);
-    class_addsymbol(bang_class, bang_bang);
-    class_addlist(bang_class, bang_bang);
-    class_addanything(bang_class, bang_bang);
+    class_addfloat(bang_class, bang_float);
+    class_addsymbol(bang_class, bang_symbol);
+    class_addlist(bang_class, bang_gimme);
+    class_addanything(bang_class, bang_gimme);
 }
 
 /* -------------------- send ------------------------------ */
@@ -283,15 +316,37 @@ static void send_setup(void)
     class_addanything(send_class, send_anything);
     class_sethelpsymbol(send_class, gensym("send-receive"));
 }
+
 /* -------------------- receive ------------------------------ */
 
 static t_class *receive_class;
+static t_class *receive_proxy_class;
+
+typedef struct _receive_proxy
+{
+    t_pd              p_pd;
+    struct _receive  *p_owner;
+} t_receive_proxy;
 
 typedef struct _receive
 {
-    t_object x_obj;
-    t_symbol *x_sym;
+    t_object         x_obj;
+    t_receive_proxy  x_proxy;
+    t_symbol        *x_sym;
 } t_receive;
+
+static void receive_proxy_init(t_receive_proxy * p, t_receive *x)
+{
+    p->p_pd = receive_proxy_class;
+    p->p_owner = x;
+}
+
+static void receive_proxy_symbol(t_receive_proxy *p, t_symbol* s)
+{
+    t_receive *x = p->p_owner;
+    pd_unbind(&x->x_obj.ob_pd, x->x_sym);
+    pd_bind(&x->x_obj.ob_pd, x->x_sym = s);
+}
 
 static void receive_bang(t_receive *x)
 {
@@ -328,6 +383,11 @@ static void *receive_new(t_symbol *s)
     t_receive *x = (t_receive *)pd_new(receive_class);
     x->x_sym = s;
     pd_bind(&x->x_obj.ob_pd, s);
+    if (!*x->x_sym->s_name)
+    {
+        receive_proxy_init(&x->x_proxy, x);
+        inlet_new(&x->x_obj, &x->x_proxy.p_pd, 0, 0);
+    }
     outlet_new(&x->x_obj, 0);
     return (x);
 }
@@ -349,6 +409,9 @@ static void receive_setup(void)
     class_addlist(receive_class, receive_list);
     class_addanything(receive_class, receive_anything);
     class_sethelpsymbol(receive_class, gensym("send-receive"));
+    receive_proxy_class = (t_class *)class_new(gensym("receive proxy"),
+                0, 0, sizeof(t_receive_proxy), 0, 0);
+    class_addsymbol(receive_proxy_class, receive_proxy_symbol);
 }
 
 /* -------------------------- select ------------------------------ */
@@ -539,8 +602,7 @@ static void route_list(t_route *x, t_symbol *sel, int argc, t_atom *argv)
     if (x->x_type == A_FLOAT)
     {
         t_float f;
-        if (!argc) return;
-        if (argv->a_type != A_FLOAT)
+        if (!argc || argv->a_type != A_FLOAT)
             goto rejected;
         f = atom_getfloat(argv);
         for (nelement = x->x_nelement, e = x->x_vec; nelement--; e++)
@@ -671,17 +733,16 @@ static t_class *pack_class;
 typedef struct _pack
 {
     t_object x_obj;
-    t_int x_n;              /* number of args */
     t_atom *x_vec;          /* input values */
-    t_int x_nptr;           /* number of pointers */
     t_gpointer *x_gpointer; /* the pointers */
-    t_atom *x_outvec;       /* space for output values */
+    int x_n;                /* number of args */
+    int x_nptr;             /* number of pointers */
 } t_pack;
 
 static void *pack_new(t_symbol *s, int argc, t_atom *argv)
 {
     t_pack *x = (t_pack *)pd_new(pack_class);
-    t_atom defarg[2], *ap, *vec, *vp;
+    t_atom defarg[2], *vec;
     t_gpointer *gp;
     int nptr = 0;
     int i;
@@ -695,34 +756,33 @@ static void *pack_new(t_symbol *s, int argc, t_atom *argv)
 
     x->x_n = argc;
     vec = x->x_vec = (t_atom *)getbytes(argc * sizeof(*x->x_vec));
-    x->x_outvec = (t_atom *)getbytes(argc * sizeof(*x->x_outvec));
 
-    for (i = argc, ap = argv; i--; ap++)
-        if (ap->a_type == A_SYMBOL && *ap->a_w.w_symbol->s_name == 'p')
+    for (i = 0; i < argc; i++)
+        if (argv[i].a_type == A_SYMBOL && *argv[i].a_w.w_symbol->s_name == 'p')
             nptr++;
 
     gp = x->x_gpointer = (t_gpointer *)t_getbytes(nptr * sizeof (*gp));
     x->x_nptr = nptr;
 
-    for (i = 0, vp = x->x_vec, ap = argv; i < argc; i++, ap++, vp++)
+    for (i = 0; i < argc; i++)
     {
-        if (ap->a_type == A_FLOAT)
+        if (argv[i].a_type == A_FLOAT)
         {
-            *vp = *ap;
-            if (i) floatinlet_new(&x->x_obj, &vp->a_w.w_float);
+            vec[i] = argv[i];
+            if (i) floatinlet_new(&x->x_obj, &vec[i].a_w.w_float);
         }
-        else if (ap->a_type == A_SYMBOL)
+        else if (argv[i].a_type == A_SYMBOL)
         {
-            char c = *ap->a_w.w_symbol->s_name;
+            char c = *argv[i].a_w.w_symbol->s_name;
             if (c == 's')
             {
-                SETSYMBOL(vp, &s_symbol);
-                if (i) symbolinlet_new(&x->x_obj, &vp->a_w.w_symbol);
+                SETSYMBOL(&vec[i], &s_symbol);
+                if (i) symbolinlet_new(&x->x_obj, &vec[i].a_w.w_symbol);
             }
             else if (c == 'p')
             {
-                vp->a_type = A_POINTER;
-                vp->a_w.w_gpointer = gp;
+                vec[i].a_type = A_POINTER;
+                vec[i].a_w.w_gpointer = gp;
                 gpointer_init(gp);
                 if (i) pointerinlet_new(&x->x_obj, gp);
                 gp++;
@@ -730,9 +790,9 @@ static void *pack_new(t_symbol *s, int argc, t_atom *argv)
             else
             {
                 if (c != 'f') pd_error(x, "pack: %s: bad type",
-                    ap->a_w.w_symbol->s_name);
-                SETFLOAT(vp, 0);
-                if (i) floatinlet_new(&x->x_obj, &vp->a_w.w_float);
+                    argv[i].a_w.w_symbol->s_name);
+                SETFLOAT(&vec[i], 0);
+                if (i) floatinlet_new(&x->x_obj, &vec[i].a_w.w_float);
             }
         }
     }
@@ -742,35 +802,34 @@ static void *pack_new(t_symbol *s, int argc, t_atom *argv)
 
 static void pack_bang(t_pack *x)
 {
-    int i, reentered = 0, size = (int)(x->x_n * sizeof(t_atom));
-    t_gpointer *gp;
-    t_atom *outvec;
-    for (i = (int)x->x_nptr, gp = x->x_gpointer; i--; gp++)
-        if (!gpointer_check(gp, 1))
+    int i;
+    t_atom *outvec = (t_atom *)alloca(x->x_n * sizeof(t_atom));
+    t_gpointer *gpvec, *gp;
+    gp = gpvec = 0;
+    if (x->x_nptr > 0)
     {
-        pd_error(x, "pack: stale pointer");
-        return;
-    }
-        /* reentrancy protection.  The first time through use the pre-allocated
-        x_outvec; if we're reentered we have to allocate new memory. */
-    if (!x->x_outvec)
-    {
-            /* LATER figure out how to deal with reentrancy and pointers... */
-        if (x->x_nptr)
-            post("pack_bang: warning: reentry with pointers unprotected");
-        outvec = t_getbytes(size);
-        reentered = 1;
+        gp = gpvec = (t_gpointer *)alloca(x->x_nptr * sizeof(t_gpointer));
+        for (i = 0; i < x->x_n; i++)
+        {
+            outvec[i] = x->x_vec[i];
+            if (x->x_vec[i].a_type == A_POINTER)
+            {
+                gpointer_copy(x->x_vec[i].a_w.w_gpointer, gp);
+                outvec[i].a_w.w_gpointer = gp;
+                gp++;
+            }
+        }
     }
     else
     {
-        outvec = x->x_outvec;
-        x->x_outvec = 0;
+        for (i = 0; i < x->x_n; i++)
+            outvec[i] = x->x_vec[i];
     }
-    memcpy(outvec, x->x_vec, size);
-    outlet_list(x->x_obj.ob_outlet, &s_list, (int)x->x_n, outvec);
-    if (reentered)
-        t_freebytes(outvec, size);
-    else x->x_outvec = outvec;
+
+    outlet_list(x->x_obj.ob_outlet, &s_list, x->x_n, outvec);
+
+    for (i = 0; i < x->x_nptr; i++)
+        gpointer_unset(&gpvec[i]);
 }
 
 static void pack_pointer(t_pack *x, t_gpointer *gp)
@@ -778,8 +837,7 @@ static void pack_pointer(t_pack *x, t_gpointer *gp)
     if (x->x_vec->a_type == A_POINTER)
     {
         gpointer_unset(x->x_gpointer);
-        *x->x_gpointer = *gp;
-        if (gp->gp_stub) gp->gp_stub->gs_refcount++;
+        gpointer_copy(gp, x->x_gpointer);
         pack_bang(x);
     }
     else pd_error(x, "pack_pointer: wrong type");
@@ -805,6 +863,7 @@ static void pack_symbol(t_pack *x, t_symbol *s)
     else pd_error(x, "pack_symbol: wrong type");
 }
 
+    /* without a list method, pack_anything() would be called */
 static void pack_list(t_pack *x, t_symbol *s, int ac, t_atom *av)
 {
     obj_list(&x->x_obj, 0, ac, av);
@@ -812,23 +871,20 @@ static void pack_list(t_pack *x, t_symbol *s, int ac, t_atom *av)
 
 static void pack_anything(t_pack *x, t_symbol *s, int ac, t_atom *av)
 {
-    t_atom *av2 = (t_atom *)getbytes((ac + 1) * sizeof(t_atom));
+    t_atom *av2 = (t_atom *)alloca((ac + 1) * sizeof(t_atom));
     int i;
     for (i = 0; i < ac; i++)
         av2[i + 1] = av[i];
     SETSYMBOL(av2, s);
-    obj_list(&x->x_obj, 0, ac+1, av2);
-    freebytes(av2, (ac + 1) * sizeof(t_atom));
+    obj_list(&x->x_obj, 0, ac + 1, av2);
 }
 
 static void pack_free(t_pack *x)
 {
-    t_gpointer *gp;
     int i;
-    for (gp = x->x_gpointer, i = (int)x->x_nptr; i--; gp++)
-        gpointer_unset(gp);
+    for (i = 0; i < x->x_nptr; i++)
+        gpointer_unset(&x->x_gpointer[i]);
     freebytes(x->x_vec, x->x_n * sizeof(*x->x_vec));
-    freebytes(x->x_outvec, x->x_n * sizeof(*x->x_outvec));
     freebytes(x->x_gpointer, x->x_nptr * sizeof(*x->x_gpointer));
 }
 
@@ -1256,6 +1312,7 @@ static t_class *makefilename_class;
 typedef enum {
     NONE = 0,
     INT,
+    UINT,
     FLOAT,
     STRING,
     POINTER,
@@ -1265,10 +1322,11 @@ typedef struct _makefilename
 {
     t_object x_obj;
     t_symbol *x_format;
+    int x_long;
     t_printtype x_accept;
 } t_makefilename;
 
-static const char* _formatscan(const char*str, t_printtype*typ) {
+static const char* _formatscan(t_makefilename *x, const char*str, t_printtype*typ) {
     int infmt=0;
     for (; *str; str++) {
         if (!infmt && *str=='%') {
@@ -1280,21 +1338,28 @@ static const char* _formatscan(const char*str, t_printtype*typ) {
                 infmt=0;
                 continue;
             }
-            if (strchr("-.#0123456789",*str)!=0)
+            if (strchr("+- #.0123456789hlL",*str)!=0) {
+                if (*str=='l')
+                    x->x_long = 1;
                 continue;
+            }
             if (*str=='s') {
                 *typ = STRING;
                 return str;
             }
-            if (strchr("fgGeE",*str)!=0) {
+            if (strchr("fFgGeEaA",*str)!=0) {
                 *typ = FLOAT;
                 return str;
             }
-            if (strchr("xXdiouc",*str)!=0) {
+            if (strchr("dic",*str)!=0) {
                 *typ = INT;
                 return str;
             }
-           if (strchr("p",*str)!=0) {
+            if (strchr("ouxX",*str)!=0) {
+                *typ = UINT;
+                return str;
+            }
+            if (strchr("p",*str)!=0) {
                 *typ = POINTER;
                 return str;
             }
@@ -1309,12 +1374,13 @@ static void makefilename_scanformat(t_makefilename *x)
     const char *str;
     t_printtype typ;
     if (!x->x_format) return;
+    x->x_long = 0;
     str = x->x_format->s_name;
-    str = _formatscan(str, &typ);
+    str = _formatscan(x, str, &typ);
     x->x_accept = typ;
     if (str && (NONE != typ)) {
             /* try again, to see if there's another format specifier (which we forbid) */
-        str = _formatscan(str, &typ);
+        str = _formatscan(x, str, &typ);
         if (NONE != typ) {
             pd_error(x, "makefilename: invalid format string '%s' (too many format specifiers)", x->x_format->s_name);
             x->x_format = 0;
@@ -1337,17 +1403,38 @@ static void *makefilename_new(t_symbol *s)
 
 static void makefilename_float(t_makefilename *x, t_floatarg f)
 {
+#define CLAMP(var, min, max) (var>(t_float)max)?max:(var<(t_float)min)?min:var
     char buf[MAXPDSTRING];
     if(!x->x_format) {
-        pd_error(x, "makefilename: no format specifier given");
+        pd_error(x, "makefilename: invalid format string");
         return;
     }
     switch(x->x_accept) {
     case NONE:
         sprintf(buf, "%s",  x->x_format->s_name);
         break;
-    case INT: case POINTER:
-        sprintf(buf, x->x_format->s_name, (int)f);
+    case INT: {
+        if (x->x_long) {
+            long int i = CLAMP(f, LONG_MIN, LONG_MAX);
+            sprintf(buf, x->x_format->s_name, i);
+        } else {
+            int i = CLAMP(f, INT_MIN, INT_MAX);
+            sprintf(buf, x->x_format->s_name, i);
+        }
+        break;
+    }
+    case UINT: {
+        if (x->x_long) {
+            unsigned long int i = CLAMP(f, 0, ULONG_MAX);
+            sprintf(buf, x->x_format->s_name, i);
+        } else {
+            unsigned int i = CLAMP(f, 0, UINT_MAX);
+            sprintf(buf, x->x_format->s_name, i);
+        }
+        break;
+    }
+    case POINTER:
+        sprintf(buf, x->x_format->s_name, (t_int)f);
         break;
     case FLOAT:
         sprintf(buf, x->x_format->s_name, f);
@@ -1369,14 +1456,14 @@ static void makefilename_symbol(t_makefilename *x, t_symbol *s)
 {
     char buf[MAXPDSTRING];
     if(!x->x_format) {
-        pd_error(x, "makefilename: no format specifier given");
+        pd_error(x, "makefilename: invalid format string");
         return;
     }
     switch(x->x_accept) {
     case STRING: case POINTER:
         sprintf(buf, x->x_format->s_name, s->s_name);
         break;
-    case INT:
+    case INT: case UINT:
         sprintf(buf, x->x_format->s_name, 0);
         break;
     case FLOAT:
@@ -1396,11 +1483,11 @@ static void makefilename_bang(t_makefilename *x)
 {
     char buf[MAXPDSTRING];
     if(!x->x_format) {
-        pd_error(x, "makefilename: no format specifier given");
+        pd_error(x, "makefilename: invalid format string");
         return;
     }
     switch(x->x_accept) {
-    case INT:
+    case INT: case UINT:
         sprintf(buf, x->x_format->s_name, 0);
         break;
     case FLOAT:
@@ -1599,16 +1686,18 @@ int value_setfloat(t_symbol *s, t_float f)
     return (0);
 }
 
-static void vcommon_float(t_vcommon *x, t_float f)
+static void vcommon_list(t_vcommon *x, t_symbol *s, int argc, t_atom *argv)
 {
-    x->c_f = f;
+    if (argc && argv->a_type == A_FLOAT)
+        x->c_f = argv->a_w.w_float;
 }
 
 static void *value_new(t_symbol *s)
 {
     t_value *x = (t_value *)pd_new(value_class);
     if (!*s->s_name)
-        inlet_new(&x->x_obj, &x->x_obj.ob_pd, gensym("symbol"), gensym("symbol2"));
+        inlet_new(&x->x_obj, &x->x_obj.ob_pd, gensym("symbol"),
+            gensym("symbol2"));
     x->x_sym = s;
     x->x_floatstar = value_get(s);
     outlet_new(&x->x_obj, &s_float);
@@ -1655,10 +1744,12 @@ static void value_setup(void)
     class_addfloat(value_class, value_float);
     class_addmethod(value_class, (t_method)value_symbol2, gensym("symbol2"),
         A_DEFSYM, 0);
-    class_addmethod(value_class, (t_method)value_send, gensym("send"), A_SYMBOL, 0);
+    class_addmethod(value_class, (t_method)value_send, gensym("send"),
+        A_SYMBOL, 0);
     vcommon_class = class_new(gensym("value"), 0, 0,
         sizeof(t_vcommon), CLASS_PD, 0);
-    class_addfloat(vcommon_class, vcommon_float);
+    class_addlist(vcommon_class, vcommon_list);
+    class_addanything(vcommon_class, nullfn);
 }
 
 /* -------------- overall setup routine for this file ----------------- */

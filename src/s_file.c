@@ -29,9 +29,7 @@
 #include <tchar.h>
 #include <io.h>
 #endif
-#ifdef _MSC_VER  /* This is only for Microsoft's compiler, not cygwin, e.g. */
-#define snprintf _snprintf
-#endif
+#include "m_private_utils.h"
 #ifdef __APPLE__ /* needed for plist handling */
 #include <CoreFoundation/CoreFoundation.h>
 #endif
@@ -41,6 +39,10 @@ void sys_doflags(void);
 static PERTHREAD char *sys_prefbuf;
 static PERTHREAD int sys_prefbufsize;
 static PERTHREAD FILE *sys_prefsavefp;
+
+/* from s_audio.c */
+int sys_audioapidevnametonumber(int output, int api, const char *name);
+
 
 static void sys_initloadpreferences_file(const char *filename)
 {
@@ -136,6 +138,73 @@ static void sys_donesavepreferences_file(void)
 
 static PERTHREAD CFMutableDictionaryRef sys_prefdict = NULL;
 
+// migrate legacy preferences to the new domain
+static int preferences_migrate(void)
+{
+    struct stat statbuf;
+    mode_t legacy_mode;
+    char legacy_prefs[MAXPDSTRING], modern_prefs[MAXPDSTRING];
+    char *homedir = getenv("HOME");
+    const int copyprefs = 1;
+
+    pd_snprintf(legacy_prefs, MAXPDSTRING,
+        "%s/Library/Preferences/org.puredata.pd.plist", homedir);
+    pd_snprintf(modern_prefs, MAXPDSTRING,
+        "%s/Library/Preferences/info.puredata.pd.plist", homedir);
+
+    if (0 == stat(modern_prefs, &statbuf))
+    {
+            /* already migrated: skip */
+        return 0;
+    }
+    if (0 != stat(legacy_prefs, &statbuf))
+    {
+            /* no legacy preferences: skip */
+        return 0;
+    }
+    legacy_mode = statbuf.st_mode;
+
+    if (copyprefs)
+    {
+            /* copy the preferences (so the legacy ones can still be used by older Pd installations */
+        int result = 1;
+        char buf[1024];
+        ssize_t len;
+        int oldfd = sys_open(legacy_prefs, O_RDONLY);
+        int newfd = sys_open(modern_prefs, O_WRONLY | O_CREAT | O_TRUNC, legacy_mode);
+
+        if(oldfd < 0 || newfd < 0)
+            goto cleanup;
+
+        while((len=read(oldfd, buf, sizeof(buf)))>0) {
+            ssize_t wlen=write(newfd, buf, len);
+                /* TODO: cater for partial writes */
+            if (wlen<1) {
+                result = -1 ;
+            }
+        }
+
+    cleanup:
+        if(oldfd >= 0)
+            sys_close(oldfd);
+        if(newfd >= 0)
+            sys_close(newfd);
+
+        return result;
+    }
+    else
+    {
+            /* rename the preferences */
+        if (rename(legacy_prefs, modern_prefs))
+        {
+                /* migration failed */
+            return -1;
+        }
+    }
+        /* successfully migrated */
+    return 1;
+}
+
 // get preferences file load path into dst, returns 1 if embedded
 static int preferences_getloadpath(char *dst, size_t size)
 {
@@ -143,10 +212,10 @@ static int preferences_getloadpath(char *dst, size_t size)
     char user_prefs[MAXPDSTRING];
     char *homedir = getenv("HOME");
     struct stat statbuf;
-    snprintf(embedded_prefs, MAXPDSTRING, "%s/../org.puredata.pd",
+    pd_snprintf(embedded_prefs, MAXPDSTRING, "%s/../info.puredata.pd",
         sys_libdir->s_name);
-    snprintf(user_prefs, MAXPDSTRING,
-        "%s/Library/Preferences/org.puredata.pd.plist", homedir);
+    pd_snprintf(user_prefs, MAXPDSTRING,
+        "%s/Library/Preferences/info.puredata.pd.plist", homedir);
     if (stat(user_prefs, &statbuf) == 0)
     {
         strncpy(dst, user_prefs, size);
@@ -163,8 +232,8 @@ static int preferences_getloadpath(char *dst, size_t size)
 static void preferences_getsavepath(char *dst, size_t size)
 {
     char user_prefs[MAXPDSTRING];
-    snprintf(user_prefs, MAXPDSTRING,
-        "%s/Library/Preferences/org.puredata.pd.plist", getenv("HOME"));
+    pd_snprintf(user_prefs, MAXPDSTRING,
+        "%s/Library/Preferences/info.puredata.pd.plist", getenv("HOME"));
     strncpy(dst, user_prefs, size);
 }
 
@@ -328,10 +397,10 @@ static int sys_getpreference(const char *key, char *value, int size)
         char path[MAXPDSTRING];
         int embedded = preferences_getloadpath(path, MAXPDSTRING);
         if (embedded)
-            snprintf(cmdbuf, 256, "defaults read %s %s 2> /dev/null\n",
+            pd_snprintf(cmdbuf, 256, "defaults read %s %s 2> /dev/null\n",
                 path, key);
         else
-            snprintf(cmdbuf, 256, "defaults read org.puredata.pd %s 2> /dev/null\n",
+            pd_snprintf(cmdbuf, 256, "defaults read info.puredata.pd %s 2> /dev/null\n",
                 key);
         FILE *fp = popen(cmdbuf, "r");
         while (nread < size)
@@ -375,14 +444,19 @@ static void sys_putpreference(const char *key, const char *value)
     else {
         /* fallback to defaults command */
         char cmdbuf[MAXPDSTRING];
-        snprintf(cmdbuf, MAXPDSTRING,
-            "defaults write org.puredata.pd %s \"%s\" 2> /dev/null\n", key, value);
+        pd_snprintf(cmdbuf, MAXPDSTRING,
+            "defaults write info.puredata.pd %s \"%s\" 2> /dev/null\n", key, value);
         system(cmdbuf);
     }
 }
 
 #elif defined(_WIN32)
 /*****  windows: read and write to registry ******/
+static int preferences_migrate(void)
+{
+        /* nothing to migrate yet */
+    return 0;
+}
 
 static void sys_initloadpreferences(void)
 {
@@ -396,10 +470,35 @@ static void sys_doneloadpreferences(void)
         sys_doneloadpreferences_file();
 }
 
+static int sys_deletepreference(const char *key);
+
 static void sys_initsavepreferences(void)
 {
     if (sys_prefsavefp)
         bug("sys_initsavepreferences");
+    else    /* delete previous audio/MIDI device and search path entries */
+    {
+        int i, j;
+        char buf[MAXPDSTRING], devname[MAXPDSTRING];
+        const char *key[4] = { "audioin", "audioout", "midiin", "midiout" };
+        int maxnum[4] = { MAXAUDIOINDEV, MAXAUDIOOUTDEV, MAXMIDIINDEV, MAXMIDIOUTDEV };
+        for (i = 0; i < 4; i++)
+        {
+            for (j = 0; j < maxnum[i]; j++)
+            {
+                pd_snprintf(buf, sizeof(buf), "%sdev%d", key[i], j + 1);
+                pd_snprintf(devname, sizeof(devname), "%sdevname%d", key[i], j + 1);
+                if (!sys_deletepreference(buf) || !sys_deletepreference(devname))
+                    break;
+            }
+        }
+        for (i = 0; ; i++)
+        {
+            pd_snprintf(buf, sizeof(buf), "path%d", i + 1);
+            if (!sys_deletepreference(buf))
+                break;
+        }
+    }
 }
 
 static void sys_donesavepreferences(void)
@@ -420,7 +519,7 @@ static int sys_getpreference(const char *key, char *value, int size)
             "Software\\Pure-Data", 0,  KEY_QUERY_VALUE, &hkey);
         if (err != ERROR_SUCCESS)
             return (0);
-        err = RegQueryValueEx(hkey, key, 0, 0, value, &bigsize);
+        err = RegQueryValueEx(hkey, key, 0, 0, (LPBYTE)value, &bigsize);
         if (err != ERROR_SUCCESS)
         {
             RegCloseKey(hkey);
@@ -446,15 +545,47 @@ static void sys_putpreference(const char *key, const char *value)
             pd_error(0, "unable to create registry entry: %s\n", key);
             return;
         }
-        err = RegSetValueEx(hkey, key, 0, REG_EXPAND_SZ, value, strlen(value)+1);
+        err = RegSetValueEx(hkey, key, 0, REG_EXPAND_SZ, (const LPBYTE)value, strlen(value)+1);
         if (err != ERROR_SUCCESS)
             pd_error(0, "unable to set registry entry: %s\n", key);
         RegCloseKey(hkey);
     }
 }
 
+static int sys_deletepreference(const char *key)
+{
+    if (sys_prefsavefp)
+    {
+        bug("sys_deletepreference");
+        return 0;
+    }
+    else
+    {
+        HKEY hkey;
+        LONG err;
+        err = RegOpenKeyEx(HKEY_CURRENT_USER,
+            "Software\\Pure-Data", 0, KEY_SET_VALUE, &hkey);
+        if (err != ERROR_SUCCESS)
+            return 0;
+        err = RegDeleteValue(hkey, key);
+        if (err == ERROR_SUCCESS)
+        {
+            RegCloseKey(hkey);
+            return 1;
+        } else if (err != ERROR_FILE_NOT_FOUND)
+            pd_error(0, "unable to delete registry entry: %s\n", key);
+        RegCloseKey(hkey);
+        return 0;
+    }
+}
+
 #else
 /*****  linux/android/BSD etc: read and write to ~/.pdsettings file ******/
+static int preferences_migrate(void)
+{
+        /* nothing to migrate yet */
+    return 0;
+}
 
 static void sys_initloadpreferences(void)
 {
@@ -465,9 +596,9 @@ static void sys_initloadpreferences(void)
     char default_prefs_file[MAXPDSTRING];
     struct stat statbuf;
 
-    snprintf(default_prefs_file, MAXPDSTRING, "%s/default.pdsettings",
+    pd_snprintf(default_prefs_file, MAXPDSTRING, "%s/default.pdsettings",
         sys_libdir->s_name);
-    snprintf(user_prefs_file, MAXPDSTRING, "%s/.pdsettings",
+    pd_snprintf(user_prefs_file, MAXPDSTRING, "%s/.pdsettings",
         (homedir ? homedir : "."));
     if (stat(user_prefs_file, &statbuf) == 0)
         strncpy(filenamebuf, user_prefs_file, MAXPDSTRING);
@@ -496,7 +627,7 @@ static void sys_initsavepreferences(void)
 
     if (!homedir)
         return;
-    snprintf(filenamebuf, MAXPDSTRING, "%s/.pdsettings", homedir);
+    pd_snprintf(filenamebuf, MAXPDSTRING, "%s/.pdsettings", homedir);
     filenamebuf[MAXPDSTRING-1] = 0;
     sys_initsavepreferences_file(filenamebuf);
 }
@@ -524,7 +655,18 @@ void sys_loadpreferences(const char *filename, int startingup)
 
     if (*filename)
         sys_initloadpreferences_file(filename);
-    else sys_initloadpreferences();
+    else
+    {
+        int migration_status = preferences_migrate();
+        if(migration_status)
+        {
+            if(migration_status < 0)
+                pd_error(0, "failed to migrate Pd preferences");
+            else
+                logpost(NULL, PD_VERBOSE, "successfully migrated Pd preferences");
+        }
+        sys_initloadpreferences();
+    }
         /* load audio preferences */
     if (!sys_externalschedlib
         && sys_getpreference("audioapi", prefbuf, MAXPDSTRING)
@@ -552,7 +694,7 @@ void sys_loadpreferences(const char *filename, int startingup)
                 also saved and if it matches one we have now */
             sprintf(keybuf, "audioindevname%d", as.a_nindev+1);
             if (sys_getpreference(keybuf, prefbuf, MAXPDSTRING)
-                && (devn = sys_audiodevnametonumber(0, prefbuf)) >= 0)
+                && (devn = sys_audioapidevnametonumber(0, as.a_api, prefbuf)) >= 0)
                     as.a_indevvec[as.a_nindev] = devn;
             as.a_nindev++;
         }
@@ -578,7 +720,7 @@ void sys_loadpreferences(const char *filename, int startingup)
                         break;
             sprintf(keybuf, "audiooutdevname%d", as.a_noutdev+1);
             if (sys_getpreference(keybuf, prefbuf, MAXPDSTRING)
-                && (devn = sys_audiodevnametonumber(1, prefbuf)) >= 0)
+                && (devn = sys_audioapidevnametonumber(1, as.a_api, prefbuf)) >= 0)
                     as.a_outdevvec[as.a_noutdev] = devn;
             as.a_noutdev++;
         }
@@ -692,8 +834,6 @@ void sys_loadpreferences(const char *filename, int startingup)
 #else
         sys_hipriority = 1;
 #endif
-    if (sys_getpreference("zoom", prefbuf, MAXPDSTRING))
-        sscanf(prefbuf, "%d", &sys_zoom_open);
 
     sys_doneloadpreferences();
 }
@@ -813,21 +953,18 @@ void sys_savepreferences(const char *filename)
     sys_putpreference("flags",
         (sys_flags ? sys_flags->s_name : ""));
         /* misc */
-    sprintf(buf1, "%d", sys_zoom_open);
-    sys_putpreference("zoom", buf1);
     sys_putpreference("loading", "no");
 
     sys_donesavepreferences();
 }
-
     /* calls from GUI to load/save from/to a file */
 void glob_loadpreferences(t_pd *dummy, t_symbol *filesym)
 {
     sys_loadpreferences(filesym->s_name, 0);
-    sys_close_audio();
-    sys_reopen_audio();
     sys_close_midi();
     sys_reopen_midi();
+    if (audio_isopen())
+        sys_reopen_audio();
 }
 
 void glob_savepreferences(t_pd *dummy, t_symbol *filesym)
@@ -841,7 +978,7 @@ void glob_forgetpreferences(t_pd *dummy)
     char user_prefs_file[MAXPDSTRING]; /* user prefs file */
     const char *homedir = getenv("HOME");
     struct stat statbuf;
-    snprintf(user_prefs_file, MAXPDSTRING, "%s/.pdsettings",
+    pd_snprintf(user_prefs_file, MAXPDSTRING, "%s/.pdsettings",
         (homedir ? homedir : "."));
     user_prefs_file[MAXPDSTRING-1] = 0;
     if (stat(user_prefs_file, &statbuf) != 0) {
@@ -858,8 +995,8 @@ void glob_forgetpreferences(t_pd *dummy)
     if (!sys_getpreference("audioapi", cmdbuf, MAXPDSTRING))
         post("no Pd settings to clear"), warn = 0;
             /* do it anyhow, why not... */
-    snprintf(cmdbuf, MAXPDSTRING,
-        "defaults delete org.puredata.pd 2> /dev/null\n");
+    pd_snprintf(cmdbuf, MAXPDSTRING,
+        "defaults delete info.puredata.pd 2> /dev/null\n");
     if (system(cmdbuf) && warn)
         post("failed to erase Pd settings");
     else if(warn) post("erased Pd settings");
